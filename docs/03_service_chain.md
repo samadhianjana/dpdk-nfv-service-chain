@@ -1,43 +1,72 @@
 # 03\. Configuring the Service Chain
 
-This guide details the configuration of the two critical components of the testbed: the Traffic Generator (Cisco TRex) and the Traffic Forwarder (DPDK L2fwd).
+This guide details the configuration of the Traffic Generator (Cisco TRex) and the customization of the Traffic Forwarder (DPDK L2fwd) to support a specific "Snake" topology (Port 0 -\> Port 1).
 
 ## 1\. Configure the Traffic Forwarder (VM2: `dpdk-2`)
 
-The forwarder acts as the "Device Under Test" (DUT). It receives packets on one port and re-transmits them on the other, effectively looping the traffic back to the generator.
+The forwarder acts as the "Device Under Test" (DUT). We will modify the standard `l2fwd` example to act as a **Smart Forwarder**, explicitly rewriting destination addresses to ensure the return traffic is accepted by the Generator.
 
-We use the `l2fwd` example application included with DPDK. It provides better performance and MAC address handling than the basic skeleton example.
+### A. Modifying the Source Code
 
-### Running the Application
+We need to hardcode the Destination MAC address of the Generator's receiving port (TRex Port 1) into the forwarding logic.
 
-No configuration file is needed for `l2fwd`. It is configured via command-line arguments at runtime.
+1.  **Open the source file:**
 
-**Command Syntax:**
+    ```bash
+    nano ~/dpdk-25.11/examples/l2fwd/main.c
+    ```
+
+2.  **Locate the Mac Updating Logic:**
+    Search for the function `l2fwd_mac_updating` (Press `Ctrl+W` -\> type `l2fwd_mac_updating`).
+
+3.  **Replace the function:**
+    Delete the existing function body and paste the following code.
+    *(Note: The MAC address `52:54:00:f0:6d:aa` below corresponds to TRex Port 1. Update this if your specific VM MAC differs).*
+
+    ```c
+    static void
+    l2fwd_mac_updating(struct rte_mbuf *m, unsigned dest_portid)
+    {
+        struct rte_ether_hdr *eth;
+        eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
+
+        /* Update Source Addr: Set it to VM2's Own MAC */
+        /* This tells TRex that the packet came from VM2 */
+        rte_ether_addr_copy(&l2fwd_ports_eth_addr[dest_portid], &eth->src_addr);
+
+        /* Update Dest Addr: HARDCODE to TRex Port 1 */
+        /* This ensures TRex Port 1 accepts the packet naturally */
+        struct rte_ether_addr target_mac = {{0x52, 0x54, 0x00, 0xf0, 0x6d, 0xaa}};
+        rte_ether_addr_copy(&target_mac, &eth->dst_addr);
+    }
+    ```
+
+4.  **Recompile the Application:**
+    Since we changed the code, we must rebuild the binary.
+
+    ```bash
+    cd ~/dpdk-25.11
+    meson configure build -Dexamples=l2fwd
+    ninja -C build
+    ```
+
+### B. Running the Application
+
+Run the modified application. **Do NOT** use the `--no-mac-updating` flag, as we want our custom function to execute.
 
 ```bash
-sudo ./dpdk-l2fwd -l <core_list> -n <mem_channels> -- -p <port_mask> -T <stats_interval> --no-mac-updating
+# Point to the newly built binary
+sudo ./build/examples/l2fwd/dpdk-l2fwd -l 0-1 -n 4 -- -p 0x3 -T 1
 ```
 
-**Operational Command:**
-Run this on **VM2**:
-
-```bash
-cd ~/dpdk-21.11/build/examples
-sudo ./dpdk-l2fwd -l 0-1 -n 4 -- -p 0x3 -T 1 --no-mac-updating
-```
-
-**Argument Explanation:**
-
-  * `-l 0-1`: Uses Logical Cores 0 and 1 (1 Master, 1 Worker).
-  * `-n 4`: Optimizes for 4 memory channels (adjust based on host hardware).
-  * `-p 0x3`: Port Mask. `0x3` (Binary `11`) enables Port 0 and Port 1.
-  * `--no-mac-updating`: **Crucial.** Prevents the forwarder from altering the destination MAC address. This ensures the packet acts as a "reflection" so TRex recognizes it upon return.
+  * **`-p 0x3`**: Enables Port 0 and Port 1.
+  * **Logic:** The app will receive packets on Port 0 and automatically forward them to Port 1 (and vice versa), applying our new MAC address fix to every packet.
 
 -----
 
 ## 2\. Configure the Traffic Generator (VM1: `dpdk-1`)
 
-Cisco TRex requires a specific YAML configuration file (`/etc/trex_cfg.yaml`) to map the DPDK ports and define the destination MAC addresses of the DUT (VM2).
+TRex requires a configuration file to map the DPDK ports.
 
 ### A. Install TRex
 
