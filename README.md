@@ -16,6 +16,8 @@ The topology implements a **Unidirectional "Snake" Flow**:
 
 The setup utilizes two nested Virtual Machines running on a KVM Hypervisor. The network path is fully isolated from the host OS to ensure accurate benchmarking.
 
+![architecture diagram](docs/images/architecture_diagram.png)
+
 ## Technology Stack
 
   * **Hypervisor:** QEMU/KVM with Libvirt (Virtual Machine Manager)
@@ -38,7 +40,7 @@ Detailed step-by-step instructions for reproducing this lab are available in the
   * [03. Configuring the Service Chain](docs/03_service_chain.md)
       * Setting up Isolated Bridges
       * **Implementing Custom MAC Rewrite Logic (C-Code Mod)**
-  * [04. Running Benchmarks](ocs/04_benchmarking.md)
+  * [04. Running Benchmarks](docs/04_benchmarking.md)
       * Running L2fwd
       * Executing TRex Scripts with Port Pinning
 
