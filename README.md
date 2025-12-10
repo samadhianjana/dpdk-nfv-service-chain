@@ -2,9 +2,10 @@
 
 **A high-performance Network Function Virtualization (NFV) testbed implementing a transparent L2 forwarding service chain using KVM, DPDK, and Cisco TRex.**
 
-## Overview
-
 This project demonstrates the implementation and benchmarking of a virtualized network service chain. By utilizing **Kernel Bypass networking (DPDK)**, this setup achieves high-throughput packet processing between virtual machines, bypassing the standard Linux kernel network stack.
+
+**Key Implementation Note:**
+To ensure precise packet delivery and 0% reflection/loss without relying on Promiscuous Mode, this project implements **Hardcoded Destination MAC Rewriting**. The DPDK applications are modified at the source code level to explicitly target the Traffic Generator's receiving port.
 
 The project explores three different packet processing architectures:
 
@@ -15,9 +16,8 @@ The project explores three different packet processing architectures:
 The topology implements a **Unidirectional "Snake" Flow**:
 
   * **Source:** Traffic is generated on **TRex Port 0**.
-  * **Forwarding:** The DUT (VM2) receives packets on Port 0 and forwards them to Port 1.
+  * **Forwarding:** The DUT (VM2) receives packets on Port 0, overwrites the Destination MAC to match **TRex Port 1**, and forwards the packet.
   * **Destination:** Traffic returns to the Generator on **TRex Port 1**.
-
 ## Architecture
 
 The setup utilizes two nested Virtual Machines running on a KVM Hypervisor. The network path is fully isolated from the host OS to ensure accurate benchmarking.
@@ -28,7 +28,7 @@ The setup utilizes two nested Virtual Machines running on a KVM Hypervisor. The 
 
   * **Hypervisor:** QEMU/KVM with Libvirt
   * **Packet Processing:** DPDK v25.11
-      * *Modules:* `l2fwd` (Customized), `l2fwd-event`, `eventdev_pipeline`
+      * *Modules:* `l2fwd`, `l2fwd-event`, `eventdev_pipeline` (All Modified)
   * **Traffic Generator:** Cisco TRex v3.08
   * **Drivers:** `virtio-pci` with `uio_pci_generic`
   * **Network Mode:** Isolated Virtual Networks
@@ -50,36 +50,37 @@ Detailed step-by-step instructions are available in the `docs/` directory:
 | Metric | Result | Notes |
 | :--- | :--- | :--- |
 | **Throughput (Zero Loss)** | **\~21 Mbps** | Limited by nested virtualization overhead |
-| **Packet Loss @ Max Load** | **0%** | Verified via TRex TUI |
+| **Packet Loss @ Max Load** | **0%** | Achieved via Hardcoded MAC Logic |
 | **Topology** | **Unidirectional** | Port 0 -\> Port 1 |
+
 
 ## Quick Start (Summary)
 
-To spin up the service chain, choose your forwarding engine below.
+To spin up the service chain, choose your forwarding engine below. All options require the **Hardcoded MAC modification** detailed in the documentation.
 
 ### 1\. Start the Forwarder (VM2)
 
 **Option A: Standard Polling (Best for simplicity)**
-*Uses our custom C-code modification to rewrite MAC addresses.*
+*Uses **Hardcoded MAC Rewriting** (Custom C-code) to direct traffic to TRex Port 1.*
 
 ```bash
-sudo ./build/examples/l2fwd/dpdk-l2fwd -l 0-1 -n 4 -- -p 0x3 -T 1
+sudo ./build/examples/dpdk-l2fwd -l 0-1 -n 4 -- -p 0x3 -T 1
 ```
 
 **Option B: L2fwd-Event (Automated Scheduling)**
-*Uses the Software Eventdev Driver (`event_sw0`) with Core 3 as the Scheduler.*
+*Uses **Hardcoded MAC Rewriting** within the event loop to ensure correct routing.*
 
 ```bash
-sudo ./build/examples/l2fwd-event/dpdk-l2fwd-event \
+sudo ./build/examples/dpdk-l2fwd-event \
 -l 0-3 -s 0x8 -n 4 --vdev event_sw0 -- \
 -p 0x3 --mode=eventdev --eventq-sched=atomic
 ```
 
 **Option C: Eventdev Pipeline (Manual Roles)**
-*Manually assigns Rx(0), Tx(1), Sched(2), and Worker(3).*
+*Uses **Hardcoded MAC Rewriting** and manual role assignment.*
 
 ```bash
-sudo ./build/examples/eventdev_pipeline/dpdk-eventdev_pipeline \
+sudo ./build/examples/dpdk-eventdev_pipeline \
 -l 0-3 -n 4 --vdev event_sw0 -- \
 -r 0x1 -t 0x2 -e 0x4 -w 0x8 -s 1 -n 0
 ```
@@ -95,18 +96,26 @@ sudo ./t-rex-64 -i
 ```
 
 **B. Run Benchmark (Console):**
-*Note: If using **Option B or C** (without code mods), you MUST enable Promiscuous Mode first.*
+*Note: Since the Forwarder uses hardcoded MAC addresses, Promiscuous Mode is **optional** (packets are naturally accepted by the NIC).*
 
 ```bash
 ./trex-console
-
-# 1. Enable Promiscuous Mode (Required for Eventdev Options)
-portattr -a --prom on
 
 # 2. Start Traffic (Force Port 0 Source)
 start -f stl/bench.py -m 100mbps -p 0
 ```
 
+
 ## License
 
 This project is open-source and available under the MIT License.
+
+
+
+
+
+
+
+
+
+
