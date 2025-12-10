@@ -11,27 +11,62 @@ This guide explains how to switch from the standard **Polling Mode** forwarder (
 | **Architecture** | Simple Loop (Rx -\> Tx) | Pipeline (Rx -\> Scheduler -\> Worker -\> Tx) |
 | **Driver Used** | `poll_mode` | `event_sw` (Software Scheduler) |
 
+-----
+
 ## 2\. Method 1: The Automated Way (`l2fwd-event`)
 
-This application is a drop-in replacement for `l2fwd` that automatically manages core assignments (Rx, Tx, Worker) behind the scenes. It is the easiest way to start with Eventdev.
+This application is a drop-in replacement for `l2fwd` that automatically manages core assignments (Rx, Tx, Worker) behind the scenes.
 
-### A. Compilation
+### A. Code Modification (Hardcoded Snake Topology)
 
-You must explicitly configure the build target for this example.
+By default, this app swaps MAC addresses, which causes TRex to drop returning packets. We will modify the header file to force the destination MAC to **TRex Port 1**.
 
-**Run on VM2:**
+1.  **Edit the Header File:**
+
+    ```bash
+    nano ~/dpdk-25.11/examples/l2fwd-event/l2fwd_common.h
+    ```
+
+2.  **Replace File Content:** Delete the entire file content and replace it with the following. This adds the `extern` declaration and the hardcoded MAC logic.
+
+    ```c
+    #ifndef _L2FWD_COMMON_H_
+    #define _L2FWD_COMMON_H_
+
+    #include <rte_common.h>
+    #include <rte_mbuf.h>
+    #include <rte_ether.h>
+
+    static inline void
+    l2fwd_mac_updating(struct rte_mbuf *m, unsigned int dest_portid, struct rte_ether_addr *addr)
+    {
+        struct rte_ether_hdr *eth;
+        eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
+
+        /* 1. Source MAC: Use the address passed by the caller */
+        rte_ether_addr_copy(addr, &eth->src_addr);
+
+        /* 2. Destination MAC: FORCE TO TREX PORT 1 */
+        /* REPLACE with your TRex Port 1 MAC: 52:54:00:f0:6d:aa */
+        struct rte_ether_addr target_mac = {{0x52, 0x54, 0x00, 0xf0, 0x6d, 0xaa}};
+        rte_ether_addr_copy(&target_mac, &eth->dst_addr);
+
+        (void)dest_portid; /* unused */
+    }
+    ```
+
+### B. Compilation
 
 ```bash
 cd ~/dpdk-25.11
+rm -rf build/examples/l2fwd-event # Clean build
 meson configure build -Dexamples=l2fwd-event
 ninja -C build
 ```
 
-### B. Running the Application
+### C. Running the Application
 
-We must use the **Software Event Driver** (`event_sw0`) and dedicate one core to be the "Scheduler" service.
-
-**Run on VM2:**
+We use the Software Event Driver (`event_sw0`) and dedicate Core 3 (`-s 0x8`) to the Scheduler.
 
 ```bash
 sudo ./build/examples/dpdk-l2fwd-event \
@@ -39,18 +74,41 @@ sudo ./build/examples/dpdk-l2fwd-event \
 -p 0x3 --mode=eventdev --eventq-sched=atomic
 ```
 
-  * **`-s 0x8`**: Dedicates Core 3 (Binary `1000`) as the Service Core. This core *only* schedules packets; it does not process them.
-  * **`-l 0-3`**: Uses Cores 0, 1, and 2 as Workers.
-
 -----
 
 ## 3\. Method 2: The Advanced Way (`eventdev_pipeline`)
 
-This application allows you to manually assign specific roles (Rx, Tx, Worker, Scheduler) to each CPU core via command-line flags. It offers granular control over the pipeline stages.
+This application allows manual assignment of specific roles (Rx, Tx, Worker, Scheduler) to cores.
 
-### A. Compilation
+### A. Code Modification (Hardcoded Snake Topology)
 
-**Run on VM2:**
+By default, this app forwards packets without modifying MACs. We will modify the Worker logic to force a **Port Swap** and **MAC Rewrite**.
+
+1.  **Edit the Worker File:**
+
+    ```bash
+    nano ~/dpdk-25.11/examples/eventdev_pipeline/pipeline_worker_generic.c
+    ```
+
+2.  **Locate `worker_generic_burst`:** Find the block `if (events[i].queue_id == cdata.qid[0])`.
+
+3.  **Insert Logic:** Paste this code inside that `if` block (after `txq_set`):
+
+    ```c
+    /* ... inside if (events[i].queue_id == cdata.qid[0]) ... */
+
+    /* 1. Port Swap: Force 0->1 and 1->0 */
+    events[i].mbuf->port = events[i].mbuf->port ^ 1;
+
+    /* 2. MAC Rewrite: Force destination to TRex Port 1 */
+    struct rte_ether_hdr *eth = rte_pktmbuf_mtod(events[i].mbuf, struct rte_ether_hdr *);
+
+    /* REPLACE with your TRex Port 1 MAC */
+    struct rte_ether_addr target_mac = {{0x52, 0x54, 0x00, 0xf0, 0x6d, 0xaa}};
+    rte_ether_addr_copy(&target_mac, &eth->dst_addr);
+    ```
+
+### B. Compilation
 
 ```bash
 cd ~/dpdk-25.11
@@ -58,11 +116,9 @@ meson configure build -Dexamples=eventdev_pipeline
 ninja -C build
 ```
 
-### B. Running the Application
+### C. Running the Application
 
-Assign roles using bitmasks. We use a **Software Scheduler** (`event_sw0`) again.
-
-**Run on VM2:**
+Assign roles: Rx(Core 0), Tx(Core 1), Sched(Core 2), Worker(Core 3).
 
 ```bash
 sudo ./build/examples/dpdk-eventdev_pipeline \
@@ -70,27 +126,17 @@ sudo ./build/examples/dpdk-eventdev_pipeline \
 -r 0x1 -t 0x2 -e 0x4 -w 0x8 -s 1 -n 0
 ```
 
-  * **`-r 0x1`**: Core 0 is Rx Adapter (Receive).
-  * **`-t 0x2`**: Core 1 is Tx Adapter (Transmit).
-  * **`-e 0x4`**: Core 2 is Scheduler.
-  * **`-w 0x8`**: Core 3 is Worker.
-
 -----
 
-## 4\. Traffic Generator Configuration (TRex) - **Crucial Step**
+## 4\. Traffic Generator Configuration (TRex)
 
-Because these standard examples do not rewrite MAC addresses (unlike our custom `l2fwd`), they will forward packets with their *original* destination MACs. TRex receives these packets on Port 1, sees that the destination MAC does not match its own Port 1 address, and drops them.
-
-**The Fix: Enable Promiscuous Mode**
-This forces the TRex NICs to accept *all* incoming traffic, regardless of the MAC address.
+If you have applied the **Code Modifications** (Step A) above, you do **not** need Promiscuous Mode. TRex will accept the packets naturally because they address Port 1 directly.
 
 **On VM1 (TRex Console):**
 
 ```bash
-# 1. Enable Promiscuous Mode on All Ports
-portattr -a --prom on
-
-# 2. Start Traffic (Unidirectional Snake Flow)
+# Start Traffic (Unidirectional Snake Flow)
+# -p 0: Forces traffic to start from Port 0 only
 start -f stl/bench.py -m 100mbps -p 0
 ```
 
@@ -99,7 +145,8 @@ Open the Dashboard (`tui`). You should see:
 
   * **Tx** on Port 0.
   * **Rx** on Port 1.
-  * **Zero Drop Rate** (or very close to zero).
+  * **Zero Drop Rate** (0.00 bps).
+  * **Zero Reflection** (0 Rx on Port 0).
 
 ## 5\. Performance Note
 
