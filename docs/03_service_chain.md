@@ -56,7 +56,7 @@ Run the modified application. **Do NOT** use the `--no-mac-updating` flag, as we
 
 ```bash
 # Point to the newly built binary
-sudo ./build/examples/l2fwd/dpdk-l2fwd -l 0-1 -n 4 -- -p 0x3 -T 1
+sudo ./build/examples/dpdk-l2fwd -l 0-1 -n 4 -- -p 0x3 -T 1
 ```
 
   * **`-p 0x3`**: Enables Port 0 and Port 1.
@@ -107,7 +107,7 @@ TRex provides an interactive script to generate the configuration file.
     ```yaml
     - port_limit: 2
       version: 2
-      interfaces: ['04:00.0', '05:00.0'] # VM1 PCI Addresses
+      interfaces: ['02:00.0', '08:00.0'] # VM1 PCI Addresses
       port_info:
           - dest_mac: 52:54:00:9b:eb:54  # VM2 Port 0 MAC
             src_mac:  52:54:00:6b:e8:ad
