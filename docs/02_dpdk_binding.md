@@ -44,7 +44,7 @@ dpdk-devbind.py -s
 **Output Interpretation:**
 
   * **Network devices using kernel driver:** You should see your standard `virtio-pci` devices here.
-  * **0X:00.0** (e.g., `04:00.0`): Note the PCI address of the interfaces that are **NOT** your management IP (the ones *without* the active SSH connection).
+  * **0X:00.0** (e.g., `02:00.0`): Note the PCI address of the interfaces that are **NOT** your management IP (the ones *without* the active SSH connection).
 
 > **Warning:** Do not bind the interface used for SSH (usually `enp1s0`). If you do, you will lose connection to the VM immediately.
 
@@ -52,15 +52,15 @@ dpdk-devbind.py -s
 
 Before binding a device to DPDK, you **must** bring the interface down in the Linux kernel. If you skip this step, the kernel may refuse to release the device, resulting in "Device or resource busy" errors.
 
-Using the interface names identified in the previous step (e.g., `enp4s0`, `enp5s0`):
+Using the interface names identified in the previous step (e.g., `enp2s0`, `enp8s0`):
 
 ```bash
 # Switch to root
 sudo -i
 
 # Bring down the interfaces (Replace with your actual names)
-ip link set dev enp4s0 down
-ip link set dev enp5s0 down
+ip link set dev enp2s0 down
+ip link set dev enp8s0 down
 ```
 
 *Verification: Run `ip a`. These interfaces should no longer show the `UP` flag.*
@@ -84,7 +84,7 @@ Execute the binding command using the PCI addresses identified in Step 2:
 # Syntax: dpdk-devbind.py -b <driver> <pci_address_1> <pci_address_2>
 
 # Example (Replace with your actual PCI IDs):
-dpdk-devbind.py -b uio_pci_generic 04:00.0 05:00.0
+dpdk-devbind.py -b uio_pci_generic 02:00.0 08:00.0
 ```
 
 ### Verification
